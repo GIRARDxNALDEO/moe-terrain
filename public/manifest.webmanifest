@@ -1,0 +1,32 @@
+{
+  "id": "/moe-terrain/",
+  "name": "MOE Terrain",
+  "short_name": "MOE Terrain",
+  "description": "La mémoire locale de vos chantiers",
+  "lang": "fr",
+  "start_url": "/moe-terrain/",
+  "scope": "/moe-terrain/",
+  "display": "standalone",
+  "background_color": "#F5F7F9",
+  "theme_color": "#1D2D44",
+  "icons": [
+    {
+      "src": "/moe-terrain/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/moe-terrain/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/moe-terrain/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
