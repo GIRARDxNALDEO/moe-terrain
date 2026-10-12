@@ -1972,3 +1972,24 @@ pre {
   color: #c8d6e0;
   font-size: 12px;
 }
+.trash-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+.trash-row span {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  .trash-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .trash-row button {
+    width: 100%;
+  }
+}

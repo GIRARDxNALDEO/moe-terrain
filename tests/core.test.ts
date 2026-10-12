@@ -2,7 +2,8 @@ import "fake-indexeddb/auto";
 import { test, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import JSZip from "jszip";
-import { db } from "../src/lib/db";
+import { db, TerrainDB } from "../src/lib/db";
+import Dexie from "dexie";
 import {
   createProject,
   createMeeting,
@@ -10,6 +11,10 @@ import {
   closeMeeting,
   addPlan,
   addMarker,
+  reopenMeeting,
+  setObservationDeleted,
+  setMeetingDeleted,
+  updateMeeting,
 } from "../src/lib/services";
 import {
   exportProject,
@@ -110,12 +115,9 @@ test("Clôture requiert un commentaire et ne laisse aucune écriture partielle",
   assert.equal(await db.observations.count(), 0);
   assert.equal(await db.observationEvents.count(), 0);
 });
-test("Réunion clôturée non modifiable et une seule réunion active", async () => {
+test("Réunion clôturée non modifiable sans réouverture", async () => {
   const { p, m } = await setup();
-  await assert.rejects(
-    () => createMeeting(p.id, "2026-10-08", "Réunion"),
-    /Clôturez/,
-  );
+  await createMeeting(p.id, "2026-10-08", "Réunion");
   await closeMeeting(m.id);
   await assert.rejects(
     () => saveObservation({ meetingId: m.id, state, author: "B", comment: "" }),
@@ -271,4 +273,181 @@ test("Deux mises à jour rapprochées conservent une séquence et une saisie pé
     await db.observationEvents.where("observationId").equals(o.id).count(),
     3,
   );
+});
+
+test("Réouverture, édition et nouvelle clôture conservent l’ancien bilan et un prompt actualisé", async () => {
+  const { p, m } = await setup();
+  const o = await saveObservation({
+    meetingId: m.id,
+    state,
+    author: "B",
+    comment: "Création",
+  });
+  await closeMeeting(m.id);
+  const original = (await db.generatedArtifacts
+    .where("meetingId")
+    .equals(m.id)
+    .first())!.text;
+  await createMeeting(p.id, "2026-10-08", "Suivi");
+  await reopenMeeting(m.id);
+  assert.equal((await db.meetings.get(m.id))!.status, "active");
+  assert.equal(
+    await db.meetingSnapshots.where("meetingId").equals(m.id).count(),
+    0,
+  );
+  assert.equal(
+    (await db.meetingRevisions.where("meetingId").equals(m.id).first())!.prompt,
+    original,
+  );
+  await updateMeeting(m.id, "2026-09-25", "Réunion corrigée");
+  await saveObservation({
+    meetingId: m.id,
+    observationId: o.id,
+    state: { ...state, status: "closed" },
+    comment: "Contrôle conforme",
+    author: "B",
+  });
+  await closeMeeting(m.id);
+  assert.ok(
+    (await db.generatedArtifacts
+      .where("meetingId")
+      .equals(m.id)
+      .first())!.text.includes("Réunion corrigée"),
+  );
+  const out = await exportProject(p.id);
+  const a = await inspectArchive(new File([out.blob], out.name));
+  assert.equal(a.data.meeting_revisions.length, 1);
+  const copy = await commitArchive(a, "copy");
+  assert.equal(
+    await db.meetingRevisions.where("projectId").equals(copy.id).count(),
+    1,
+  );
+});
+test("Point supprimé restaurable, absent d’un nouveau bilan et présent dans le ZIP", async () => {
+  const { p, m } = await setup();
+  const o = await saveObservation({
+    meetingId: m.id,
+    state,
+    author: "B",
+    comment: "Constat",
+  });
+  await setObservationDeleted(o.id, true);
+  const snap = await closeMeeting(m.id);
+  assert.equal(snap.observations.length, 0);
+  const out = await exportProject(p.id);
+  const a = await inspectArchive(new File([out.blob], out.name));
+  assert.ok(a.data.observations[0].deletedAt);
+  await setObservationDeleted(o.id, false);
+  assert.equal((await db.observations.get(o.id))!.deletedAt, undefined);
+});
+test("Suppression de réunion recalcule le point suivi ailleurs et restaure ses créations", async () => {
+  const { p, m } = await setup();
+  const o = await saveObservation({
+    meetingId: m.id,
+    state,
+    author: "B",
+    comment: "Création",
+  });
+  await closeMeeting(m.id);
+  const next = await createMeeting(p.id, "2026-10-08", "Réunion 2");
+  await saveObservation({
+    meetingId: next.id,
+    observationId: o.id,
+    state: { ...state, status: "closed" },
+    author: "B",
+    comment: "Levée",
+  });
+  const only = await saveObservation({
+    meetingId: next.id,
+    state: { ...state, title: "Création accidentelle" },
+    author: "B",
+    comment: "Création",
+  });
+  await setMeetingDeleted(next.id, true);
+  assert.equal((await db.observations.get(o.id))!.status, "new");
+  assert.ok((await db.observations.get(only.id))!.deletedAt);
+  await setMeetingDeleted(next.id, false);
+  assert.equal((await db.observations.get(o.id))!.status, "closed");
+  assert.equal((await db.observations.get(only.id))!.deletedAt, undefined);
+});
+test("Export utilise les octets persistés même si la lecture des Blob échoue", async () => {
+  const { p, m } = await setup();
+  await saveObservation({
+    meetingId: m.id,
+    state,
+    author: "B",
+    comment: "Photo",
+    files: [new File(["octets"], "photo.png", { type: "image/png" })],
+  });
+  const original = Blob.prototype.arrayBuffer;
+  Blob.prototype.arrayBuffer = async () => {
+    throw new DOMException(
+      "The object can not be found here.",
+      "NotFoundError",
+    );
+  };
+  let out;
+  try {
+    out = await exportProject(p.id);
+  } finally {
+    Blob.prototype.arrayBuffer = original;
+  }
+  const a = await inspectArchive(new File([out.blob], out.name));
+  assert.equal(await a.photos[0].image.text(), "octets");
+});
+test("Le ZIP V0.1 sans révisions reste importable", async () => {
+  const { p } = await setup();
+  const out = await exportProject(p.id);
+  const zip = await JSZip.loadAsync(await out.blob.arrayBuffer());
+  const manifest = JSON.parse(await zip.file("manifest.json")!.async("string"));
+  manifest.schemaVersion = 1;
+  manifest.appVersion = "0.1.0";
+  manifest.files = manifest.files.filter(
+    (f: { path: string }) => f.path !== "meeting_revisions.json",
+  );
+  zip.remove("meeting_revisions.json");
+  zip.file("manifest.json", JSON.stringify(manifest));
+  const bytes = await zip.generateAsync({ type: "uint8array" });
+  const a = await inspectArchive(
+    new File([new Uint8Array(bytes).buffer], "legacy.zip"),
+  );
+  assert.deepEqual(a.data.meeting_revisions, []);
+});
+
+test("Migration V1 vers V2 : les index manquants sont réparés sans effacer les photos", async () => {
+  const { p, m } = await setup();
+  await saveObservation({
+    meetingId: m.id,
+    state,
+    author: "B",
+    comment: "Photo",
+    files: [new File(["migration"], "photo.png")],
+  });
+  const photo = (await db.photos.toArray())[0];
+  const name = "moe-migration-test";
+  const old = new Dexie(name);
+  const stores = Object.fromEntries(
+    db.tables
+      .filter((t) => t.name !== "meetingRevisions")
+      .map((t) => [
+        t.name,
+        [t.schema.primKey.src, ...t.schema.indexes.map((i) => i.src)]
+          .filter((v) => t.name !== "photos" || v !== "projectId")
+          .join(","),
+      ]),
+  );
+  old.version(1).stores(stores);
+  await old.open();
+  await old.table("projects").add(p);
+  await old.table("photos").add(photo);
+  old.close();
+  const updated = new TerrainDB(name);
+  await updated.open();
+  assert.equal(
+    (await updated.photos.where("projectId").equals(p.id).toArray()).length,
+    1,
+  );
+  assert.equal(await updated.meetingRevisions.count(), 0);
+  updated.close();
+  await Dexie.delete(name);
 });

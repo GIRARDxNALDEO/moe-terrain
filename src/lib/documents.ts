@@ -75,7 +75,8 @@ export async function importReport(meetingId: string, file: File) {
     db.reviewCandidates,
     async () => {
       const m = await db.meetings.get(meetingId);
-      if (!m || m.status === "closed") throw Error("Réunion non modifiable");
+      if (!m || m.deletedAt || m.status === "closed")
+        throw Error("Réunion non modifiable");
       const document: SourceDocument = {
         id: documentId,
         projectId: m.projectId,
@@ -85,6 +86,7 @@ export async function importReport(meetingId: string, file: File) {
         text: chunks.map((c) => c.text).join("\n\n"),
         createdAt: now(),
         file: new Blob([buffer], { type: file.type }),
+        bytes: buffer,
       };
       await db.sourceDocuments.add(document);
       if (candidates.length) await db.reviewCandidates.bulkAdd(candidates);
@@ -108,7 +110,8 @@ export async function decideCandidate(
       const c = await db.reviewCandidates.get(id);
       if (!c) throw Error("Point introuvable");
       const m = await db.meetings.get(c.meetingId);
-      if (!m || m.status === "closed") throw Error("Réunion non modifiable");
+      if (!m || m.deletedAt || m.status === "closed")
+        throw Error("Réunion non modifiable");
       if (decision === "accepted") {
         const o = observationId
           ? await db.observations.get(observationId)

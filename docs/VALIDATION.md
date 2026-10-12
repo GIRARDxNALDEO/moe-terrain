@@ -68,3 +68,9 @@ node scripts/browser-smoke.mjs
 ```
 
 Le test démarre un serveur de fichiers uniquement pour l’essai. Le GPS est simulé et les fichiers sont fictifs. Sur Windows, définir `NEXT_PUBLIC_BASE_PATH` via PowerShell comme indiqué dans le README.
+
+## Mise à jour V0.1.1
+
+14 tests métier réussis. Nouveaux scénarios : réouverture/reclôture avec archivage du prompt, suppressions et restaurations, recalcul de l’état après suppression d’une réunion, export depuis les octets quand Blob.arrayBuffer échoue, import de l’ancien format ZIP, migration d’une base V1 dont un index était absent.
+
+Le parcours Chromium vérifie aussi les boutons Rouvrir la réunion, Supprimer ce point, Supprimer la réunion et la restauration depuis la corbeille. La compilation statique et TypeScript passent. L’erreur du navigateur de l’utilisateur n’a pas été observée directement ; les deux cas de panne (index absent et Blob illisible) ont été reproduits dans les tests. L’essai sur le projet réel reste nécessaire après installation.

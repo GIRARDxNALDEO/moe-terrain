@@ -1,4 +1,6 @@
-# MOE Terrain — V0.1
+# MOE Terrain — V0.1.1
+
+**Mise à jour :** [corrections et installation 0.1.1](docs/MISE_A_JOUR_0.1.1.md). Réouverture des réunions, corbeille et export renforcé.
 
 Une mémoire locale du chantier : réunions, observations durables, photos, GPS, plans PDF et prompt de mise à jour du compte-rendu Word existant.
 
@@ -98,7 +100,7 @@ Le test démarre son propre serveur statique sur le port 4318. Le guide de valid
 - PDF.js est fixé à 5.4.149 pour la compatibilité testée ; worker, polices, CMaps et décodeurs sont embarqués.
 - Pas d’OCR pour les PDF scannés.
 - Extraction des points ouverts par règles, à valider ; les tableaux DOCX peuvent perdre leur structure.
-- Une seule réunion active par projet ; les bilans clôturés sont figés.
+- Plusieurs réunions peuvent être ouvertes pour corriger une réunion antérieure. La réouverture archive l’ancien bilan avant de permettre une nouvelle clôture.
 - Pas de fusion de travaux parallèles : nouvelle importation, copie ou remplacement sauvegardé.
 - Photos originales conservées, sans conversion HEIC ni compression automatique. Un format non décodable reste téléchargeable.
 - Pas de miniatures pré-calculées : chargement différé des aperçus.

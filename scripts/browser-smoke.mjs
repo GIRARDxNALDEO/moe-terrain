@@ -6,7 +6,7 @@ import JSZip from "jszip";
 const root = process.env.PREVIEW_URL || "http://127.0.0.1:4318/moe-terrain/";
 const browser = await chromium.launch({
   headless: true,
-  args: ["--no-sandbox"],
+  args: ["--no-sandbox","--disable-gpu"],
 });
 const context = await browser.newContext({
   viewport: { width: 1440, height: 1000 },
@@ -15,6 +15,7 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 const errors = [];
+page.on("dialog", (d) => d.accept());
 page.on("pageerror", (e) => errors.push(e.message));
 process.on("uncaughtException", async (e) => {
   console.error(e.stack);
@@ -25,6 +26,7 @@ process.on("uncaughtException", async (e) => {
   server.close();
   process.exit(1);
 });
+console.log("Browser: start");
 await page.goto(root);
 await page.getByRole("heading", { name: /Mes chantiers/ }).waitFor();
 await page
@@ -43,6 +45,7 @@ await page
 await page
   .getByRole("button", { name: "Ouvrir la réunion", exact: true })
   .click();
+console.log("Browser: document");
 // Import a real DOCX container with an open point.
 const zip = new JSZip();
 zip.file(
@@ -95,6 +98,33 @@ await page
 await page
   .getByRole("heading", { name: "La réunion est enregistrée.", exact: true })
   .waitFor();
+await page
+  .getByRole("button", { name: "Rouvrir la réunion", exact: true })
+  .click();
+await page.getByRole("button", { name: /OBS-0001/ }).click();
+await page
+  .getByRole("button", { name: "Ajouter un suivi", exact: true })
+  .click();
+await page
+  .getByLabel("Commentaire de cette réunion")
+  .fill("Correction après clôture");
+await page.getByLabel(/^Priorité/).selectOption("high");
+await page
+  .getByRole("button", { name: "Enregistrer le point", exact: true })
+  .click();
+await page.getByText("Correction après clôture", { exact: true }).waitFor();
+await page
+  .getByRole("button", { name: "Retour aux points", exact: true })
+  .click();
+await page
+  .getByRole("button", { name: "Clôturer la réunion", exact: true })
+  .click();
+await page
+  .getByRole("button", { name: "Clôturer et générer le prompt", exact: true })
+  .click();
+await page
+  .getByRole("heading", { name: "La réunion est enregistrée.", exact: true })
+  .waitFor();
 const downloadPromise = page.waitForEvent("download");
 await page
   .getByRole("button", { name: "Sauvegarder le ZIP", exact: true })
@@ -135,6 +165,7 @@ await page
   .getByRole("button", { name: "Enregistrer le point", exact: true })
   .click();
 await page.getByText("Posé. Contrôle conforme.", { exact: true }).waitFor();
+console.log("Browser: PDF");
 // Render a real two-page PDF, place a marker and change page.
 function fixturePDF() {
   const stream1 =
@@ -202,6 +233,7 @@ await page
   .click();
 const finalArchive = await finalDownload;
 await finalArchive.saveAs(archivePath);
+console.log("Browser: ZIP import");
 // Simulate the office PC with an independent browser storage.
 const office = await browser.newContext();
 const officePage = await office.newPage();
@@ -225,6 +257,7 @@ await officePage
   .waitFor();
 assert.equal(await officePage.locator(".photo-card").count(), 1);
 await office.close();
+console.log("Browser: offline restart");
 // Restart entirely offline. Dynamic document and plan chunks must also be cached.
 await context.setOffline(true);
 await page.reload();
@@ -258,6 +291,37 @@ assert.ok(
   ),
   "Mobile horizontal overflow",
 );
+console.log("Browser: trash");
+await page
+  .getByRole("button", { name: "Observations", exact: true })
+  .first()
+  .click();
+await page.getByRole("button", { name: "Tous", exact: true }).click();
+await page.getByRole("button", { name: /OBS-0001/ }).click();
+await page
+  .getByRole("button", { name: "Supprimer ce point", exact: true })
+  .click();
+await page
+  .getByRole("button", { name: "Transfert", exact: true })
+  .first()
+  .click();
+await page
+  .getByRole("button", { name: "Restaurer le point", exact: true })
+  .click();
+await page
+  .getByRole("button", { name: "Réunions", exact: true })
+  .first()
+  .click();
+await page
+  .getByRole("button", { name: "Supprimer la réunion", exact: true })
+  .click();
+await page
+  .getByRole("button", { name: "Transfert", exact: true })
+  .first()
+  .click();
+await page
+  .getByRole("button", { name: "Restaurer la réunion", exact: true })
+  .click();
 assert.deepEqual(errors, []);
 console.log(
   "Browser smoke: DOCX, photo, GPS, PDF with zoom and marker, history, closure, ZIP import on independent PC, offline restart and mobile layout passed.",

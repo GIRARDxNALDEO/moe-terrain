@@ -36,6 +36,8 @@ import {
   MoreHorizontal,
   Archive,
   CheckCheck,
+  Trash2,
+  RotateCcw,
 } from "lucide-react";
 import { db } from "@/lib/db";
 import {
@@ -46,6 +48,10 @@ import {
   markToCheck,
   addPlan,
   addMarker,
+  reopenMeeting,
+  updateMeeting,
+  setObservationDeleted,
+  setMeetingDeleted,
 } from "@/lib/services";
 import {
   exportProject,
@@ -74,6 +80,7 @@ import {
   type Artifact,
   type Snapshot,
   type Setting,
+  type MeetingRevision,
 } from "@/lib/models";
 import ObservationEditor from "./ObservationEditor";
 import PhotoCard from "./PhotoCard";
@@ -218,6 +225,17 @@ export default function TerrainApp() {
   const [planId, setPlanId] = useState("");
   const [markerObservationId, setMarkerObservationId] = useState("");
   const [placing, setPlacing] = useState(false);
+  const [readyZip, setReadyZip] = useState<{
+    url: string;
+    name: string;
+    projectId: string;
+  }>();
+  useEffect(
+    () => () => {
+      if (readyZip) URL.revokeObjectURL(readyZip.url);
+    },
+    [readyZip],
+  );
   const [progress, setProgress] = useState(0);
   const settings = useLiveQuery<Setting[], Setting[]>(
     () => db.settings.toArray(),
@@ -226,7 +244,7 @@ export default function TerrainApp() {
   );
   const author =
     settings.find((s) => s.key === "author")?.value || "Auteur local";
-  const meetings = useLiveQuery<Meeting[], Meeting[]>(
+  const allMeetings = useLiveQuery<Meeting[], Meeting[]>(
     () =>
       projectId
         ? db.meetings.where("projectId").equals(projectId).toArray()
@@ -234,7 +252,7 @@ export default function TerrainApp() {
     [projectId],
     [],
   );
-  const observations = useLiveQuery<Observation[], Observation[]>(
+  const allObservations = useLiveQuery<Observation[], Observation[]>(
     () =>
       projectId
         ? db.observations.where("projectId").equals(projectId).toArray()
@@ -242,7 +260,7 @@ export default function TerrainApp() {
     [projectId],
     [],
   );
-  const events = useLiveQuery<ObservationEvent[], ObservationEvent[]>(
+  const allEvents = useLiveQuery<ObservationEvent[], ObservationEvent[]>(
     () =>
       projectId
         ? db.observationEvents.where("projectId").equals(projectId).toArray()
@@ -312,14 +330,39 @@ export default function TerrainApp() {
         : Promise.resolve(undefined),
     [meetingId],
   );
+  const meetings = allMeetings.filter((m) => !m.deletedAt);
+  const observations = allObservations.filter((o) => !o.deletedAt);
+  const events = allEvents.filter((e) =>
+    meetings.some((m) => m.id === e.meetingId),
+  );
+  const revisions = useLiveQuery<MeetingRevision[], MeetingRevision[]>(
+    () =>
+      meetingId
+        ? db.meetingRevisions.where("meetingId").equals(meetingId).toArray()
+        : Promise.resolve([]),
+    [meetingId],
+    [],
+  );
   const project = projects.find((p) => p.id === projectId);
   const meeting = meetings.find((m) => m.id === meetingId);
   const observation = observations.find((o) => o.id === observationId);
   const plan = plans.find((p) => p.id === planId) || plans[0];
-  const activeMeeting = meetings.find((m) => m.status !== "closed");
+  const activeMeeting =
+    meeting && meeting.status !== "closed"
+      ? meeting
+      : [...meetings]
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .find((m) => m.status !== "closed");
   const pending = candidates.filter((c) => c.decision === "pending");
   const toCheck = new Set(
-    links.filter((l) => l.toCheck && !l.checkedAt).map((l) => l.observationId),
+    links
+      .filter(
+        (l) =>
+          observations.some((o) => o.id === l.observationId) &&
+          l.toCheck &&
+          !l.checkedAt,
+      )
+      .map((l) => l.observationId),
   );
   const currentEvents = events.filter((e) => e.meetingId === meetingId);
   const touched = new Set(currentEvents.map((e) => e.observationId));
@@ -344,6 +387,7 @@ export default function TerrainApp() {
         (filter === "modified" && touched.has(o.id)) ||
         filter === o.status;
       return (
+        observations.some((current) => current.id === o.id) &&
         match &&
         `${o.title} ${o.lot} ${o.company} ${observationCode(o)}`
           .toLowerCase()
@@ -441,9 +485,25 @@ export default function TerrainApp() {
     setModal("editor");
   }
   async function doExport(id = projectId) {
+    setProgress(0);
     const out = await exportProject(id, setProgress);
-    download(out.blob, out.name);
-    setMessage("Archive générée. Conservez-la comme sauvegarde du chantier.");
+    const url = URL.createObjectURL(out.blob);
+    setReadyZip({ url, name: out.name, projectId: id });
+    requestAnimationFrame(() =>
+      document
+        .getElementById("zip-ready")
+        ?.scrollIntoView({ block: "center", behavior: "smooth" }),
+    );
+    try {
+      download(out.blob, out.name);
+      setMessage(
+        "ZIP prêt. Si le téléchargement ne démarre pas, utilisez le lien « Télécharger le ZIP prêt » ci-dessous.",
+      );
+    } catch {
+      setMessage(
+        "ZIP généré. Touchez « Télécharger le ZIP prêt » pour le récupérer.",
+      );
+    }
   }
   async function handleZip(file: File) {
     await act("Vérification de l’archive…", async () => {
@@ -635,7 +695,7 @@ export default function TerrainApp() {
             src={`${basePath}/branding/naldeo-white.png`}
             alt="Le Groupe Naldeo"
           />
-          <small className="version">MOE Terrain · V0.1</small>
+          <small className="version">MOE Terrain · V0.1.1</small>
         </div>
       </aside>
       <div className="main-shell">
@@ -701,6 +761,19 @@ export default function TerrainApp() {
           </div>
         )}
         <main className="main-content">
+          {readyZip && readyZip.projectId === projectId && (
+            <div className="notice" id="zip-ready">
+              <Archive size={18} />
+              <span>Archive prête : {readyZip.name}</span>
+              <a
+                className="button primary small"
+                href={readyZip.url}
+                download={readyZip.name}
+              >
+                Télécharger le ZIP prêt
+              </a>
+            </div>
+          )}
           {!project ? (
             <>
               <div className="page-heading">
@@ -878,6 +951,27 @@ export default function TerrainApp() {
                   consultable.
                 </p>
               )}
+              <div className="action-row" style={{ marginBottom: 20 }}>
+                <button
+                  className="button danger small"
+                  disabled={!!busy}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Supprimer ce point ? Il sera masqué et restaurable dans Transfert → Corbeille. Les bilans déjà clôturés restent historiques ; rouvrez la réunion pour corriger son prompt.",
+                      )
+                    )
+                      void act("Suppression du point…", async () => {
+                        await setObservationDeleted(observation.id, true);
+                        setObservationId("");
+                        setMessage("Point déplacé dans la corbeille.");
+                      });
+                  }}
+                >
+                  <Trash2 size={16} />
+                  Supprimer ce point
+                </button>
+              </div>
               <div className="detail-layout">
                 <div>
                   <section className="panel">
@@ -1182,6 +1276,104 @@ export default function TerrainApp() {
                   </>
                 ) : (
                   <>
+                    {meeting.status !== "closed" && (
+                      <details className="panel">
+                        <summary>
+                          Modifier la date et le type de réunion
+                        </summary>
+                        <form
+                          className="details-grid"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const f = new FormData(e.currentTarget);
+                            void act(
+                              "Modification de la réunion…",
+                              async () => {
+                                await updateMeeting(
+                                  meeting.id,
+                                  String(f.get("date")),
+                                  String(f.get("type")),
+                                );
+                                setMessage("Réunion actualisée.");
+                              },
+                            );
+                          }}
+                        >
+                          <label>
+                            Date
+                            <input
+                              type="date"
+                              name="date"
+                              required
+                              defaultValue={meeting.date}
+                            />
+                          </label>
+                          <label>
+                            Type
+                            <input
+                              name="type"
+                              required
+                              defaultValue={meeting.type}
+                            />
+                          </label>
+                          <button
+                            className="button secondary"
+                            disabled={!!busy}
+                          >
+                            Enregistrer la réunion
+                          </button>
+                        </form>
+                      </details>
+                    )}
+                    {meeting.status !== "closed" && (
+                      <details className="panel">
+                        <summary>
+                          Modifier la date et le type de réunion
+                        </summary>
+                        <form
+                          className="details-grid"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const f = new FormData(e.currentTarget);
+                            void act(
+                              "Modification de la réunion…",
+                              async () => {
+                                await updateMeeting(
+                                  meeting.id,
+                                  String(f.get("date")),
+                                  String(f.get("type")),
+                                );
+                                setMessage("Réunion actualisée.");
+                              },
+                            );
+                          }}
+                        >
+                          <label>
+                            Date
+                            <input
+                              type="date"
+                              name="date"
+                              required
+                              defaultValue={meeting.date}
+                            />
+                          </label>
+                          <label>
+                            Type
+                            <input
+                              name="type"
+                              required
+                              defaultValue={meeting.type}
+                            />
+                          </label>
+                          <button
+                            className="button secondary"
+                            disabled={!!busy}
+                          >
+                            Enregistrer la réunion
+                          </button>
+                        </form>
+                      </details>
+                    )}
                     <div className="meeting-context">
                       <button
                         className="text-button"
@@ -1203,6 +1395,49 @@ export default function TerrainApp() {
                           : "Réunion active"}
                       </span>
                       <div className="spacer" />
+                      {meeting.status === "closed" && (
+                        <button
+                          className="button secondary small"
+                          disabled={!!busy}
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                "Rouvrir cette réunion ? Son ancien bilan est conservé. Les corrections actualisent l’état courant du chantier ; les autres bilans clôturés restent inchangés.",
+                              )
+                            )
+                              void act("Réouverture…", async () => {
+                                await reopenMeeting(meeting.id);
+                                setFilter("all");
+                                setMessage(
+                                  "Réunion rouverte. Clôturez-la à nouveau après correction pour régénérer le prompt.",
+                                );
+                              });
+                          }}
+                        >
+                          <RotateCcw size={16} />
+                          Rouvrir la réunion
+                        </button>
+                      )}
+                      <button
+                        className="button danger small"
+                        disabled={!!busy}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              "Supprimer cette réunion ? Elle restera restaurable dans la corbeille. Les points créés uniquement dans cette réunion seront aussi masqués ; les points suivis ailleurs seront conservés.",
+                            )
+                          )
+                            void act("Suppression de la réunion…", async () => {
+                              await setMeetingDeleted(meeting.id, true);
+                              setMeetingId("");
+                              setObservationId("");
+                              setMessage("Réunion déplacée dans la corbeille.");
+                            });
+                        }}
+                      >
+                        <Trash2 size={16} />
+                        Supprimer la réunion
+                      </button>
                       {meeting.status !== "closed" && (
                         <button
                           className="button secondary small"
@@ -1213,6 +1448,35 @@ export default function TerrainApp() {
                         </button>
                       )}
                     </div>
+
+                    {revisions.length > 0 && (
+                      <details className="panel">
+                        <summary>
+                          Anciens bilans conservés ({revisions.length})
+                        </summary>
+                        {revisions.map((r) => (
+                          <details key={r.id}>
+                            <summary>
+                              {humanDate(r.archivedAt)} · {r.reason}
+                            </summary>
+                            <pre>{r.prompt}</pre>
+                            <button
+                              className="button secondary small"
+                              onClick={() =>
+                                download(
+                                  new Blob([r.prompt], {
+                                    type: "text/plain;charset=utf-8",
+                                  }),
+                                  `prompt_archive_${r.id}.txt`,
+                                )
+                              }
+                            >
+                              Télécharger cet ancien prompt
+                            </button>
+                          </details>
+                        ))}
+                      </details>
+                    )}
                     {meeting.status === "closed" ? (
                       <section className="copilot-panel">
                         <div className="copilot-heading">
@@ -1462,7 +1726,11 @@ export default function TerrainApp() {
                       </div>
                       <PDFViewer
                         file={plan.file}
-                        markers={markers.filter((m) => m.planId === plan.id)}
+                        markers={markers.filter(
+                          (m) =>
+                            m.planId === plan.id &&
+                            observations.some((o) => o.id === m.observationId),
+                        )}
                         observations={observations}
                         placing={placing}
                         onSelect={setObservationId}
@@ -1499,6 +1767,61 @@ export default function TerrainApp() {
               )}
               {tab === "transfer" && (
                 <>
+                  <section className="panel">
+                    <h2>Corbeille du chantier</h2>
+                    <p>
+                      Les éléments supprimés restent dans la sauvegarde ZIP.
+                      Restaurez d’abord leur réunion si elle a été supprimée.
+                    </p>
+                    {allMeetings
+                      .filter((m) => m.deletedAt)
+                      .map((m) => (
+                        <div className="trash-row" key={m.id}>
+                          <span>
+                            {humanDate(m.date)} · {m.type}
+                          </span>
+                          <button
+                            className="button secondary small"
+                            disabled={!!busy}
+                            onClick={() =>
+                              void act("Restauration…", async () => {
+                                await setMeetingDeleted(m.id, false);
+                                setMessage("Réunion restaurée.");
+                              })
+                            }
+                          >
+                            <RotateCcw size={16} />
+                            Restaurer la réunion
+                          </button>
+                        </div>
+                      ))}
+                    {allObservations
+                      .filter((o) => o.deletedAt && !o.deletionMeetingId)
+                      .map((o) => (
+                        <div className="trash-row" key={o.id}>
+                          <span>
+                            {observationCode(o)} · {o.title}
+                          </span>
+                          <button
+                            className="button secondary small"
+                            disabled={!!busy}
+                            onClick={() =>
+                              void act("Restauration…", async () => {
+                                await setObservationDeleted(o.id, false);
+                                setMessage("Point restauré.");
+                              })
+                            }
+                          >
+                            <RotateCcw size={16} />
+                            Restaurer le point
+                          </button>
+                        </div>
+                      ))}
+                    {!allMeetings.some((m) => m.deletedAt) &&
+                      !allObservations.some((o) => o.deletedAt) && (
+                        <p className="helper">La corbeille est vide.</p>
+                      )}
+                  </section>
                   <div className="transfer-grid">
                     <section className="panel">
                       <span className="feature-icon">
@@ -1582,7 +1905,7 @@ export default function TerrainApp() {
           )}
         </main>
         <footer className="app-footer">
-          <span>MOE Terrain · V0.1</span>
+          <span>MOE Terrain · V0.1.1</span>
           <span>Word reste votre référence documentaire.</span>
         </footer>
       </div>
@@ -1914,7 +2237,7 @@ export default function TerrainApp() {
                 <span>MOE Terrain · mémoire du chantier</span>
               </div>
               <p className="helper">
-                MOE Terrain V0.1 · identité visuelle NALDEO.
+                MOE Terrain V0.1.1 · identité visuelle NALDEO.
                 <br />
                 Sans synchronisation cloud, sans télémétrie, sans
                 authentification.

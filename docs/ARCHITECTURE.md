@@ -48,14 +48,14 @@ scripts/        préparation, précache, icônes et essais navigateur
 
 Un projet possède des réunions et des observations. Une observation conserve son UUID et son numéro lisible. Elle peut être revue pendant plusieurs réunions. L’état courant est matérialisé dans `observations` ; chaque mutation ajoute un événement avec l’état avant et après. Une séquence par observation garantit l’ordre même si l’horloge est corrigée.
 
-- Aucun service de suppression d’observation.
+- Suppression réversible des observations et réunions via une corbeille (V0.1.1).
 - Clôture avec motif obligatoire.
 - Réouverture avec commentaire obligatoire.
 - Un contrôle sans modification reste un événement.
-- Une réunion active à la fois par projet.
+- Plusieurs réunions peuvent être ouvertes pour corriger une réunion antérieure ; les mutations ciblent la réunion sélectionnée.
 - Les points ouverts sont copiés au programme de la réunion suivante, sans duplication des observations.
 - La clôture crée un snapshot et un prompt dans la même transaction.
-- Les corrections après clôture passent par une réunion suivante.
+- Réouverture possible : ancien snapshot et prompt archivés dans meetingRevisions, puis nouveau bilan à la clôture.
 - L’auteur est un nom local, pas une identité authentifiée.
 - Les dates d’événements viennent de l’horloge de l’appareil : pas d’horodatage certifié.
 
@@ -169,3 +169,7 @@ Les empreintes détectent une corruption accidentelle ; elles n’authentifient 
 Le prompt n’est jamais exécuté dans l’application. Il demande une modification limitée aux sections situées après le marqueur unique. Il distingue changements, levées, blocages et contrôles non effectués. Les données extraites sont désignées comme contenu source, pas instructions.
 
 Les photos locales ne deviennent pas accessibles à Copilot parce que leur chemin figure dans le texte. Elles doivent être fournies manuellement. Le maître d’œuvre valide le résultat dans Word avant diffusion.
+
+## Évolution 0.1.1
+
+La base passe à la version 2, en conservant toutes les données. Ajout de `meetingRevisions` (id, projectId, meetingId, archivedAt, reason, snapshot, prompt ; index id, projectId, meetingId). Les réunions et observations portent un `deletedAt` facultatif ; les points masqués par suppression de réunion portent `deletionMeetingId`. Les médias peuvent porter `bytes: ArrayBuffer` en plus du Blob. Les métadonnées ZIP excluent ces octets, les fichiers binaires restent dans leurs dossiers. Le format ZIP est 2 et l’import accepte aussi le format 1.

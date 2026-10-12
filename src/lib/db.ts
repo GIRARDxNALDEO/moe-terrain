@@ -13,6 +13,7 @@ import type {
   Snapshot,
   Artifact,
   Setting,
+  MeetingRevision,
 } from "./models";
 export class TerrainDB extends Dexie {
   projects!: EntityTable<Project, "id">;
@@ -27,6 +28,7 @@ export class TerrainDB extends Dexie {
   reviewCandidates!: EntityTable<ReviewCandidate, "id">;
   meetingSnapshots!: EntityTable<Snapshot, "id">;
   generatedArtifacts!: EntityTable<Artifact, "id">;
+  meetingRevisions!: EntityTable<MeetingRevision, "id">;
   settings!: EntityTable<Setting, "key">;
   constructor(name = "moe-terrain") {
     super(name);
@@ -45,6 +47,24 @@ export class TerrainDB extends Dexie {
       reviewCandidates: "id,meetingId,sourceDocumentId",
       meetingSnapshots: "id,&meetingId,projectId",
       generatedArtifacts: "id,meetingId,projectId",
+      settings: "key",
+    });
+    this.version(2).stores({
+      projects: "id,updatedAt",
+      meetings: "id,projectId,[projectId+date]",
+      observations: "id,projectId,[projectId+status],&[projectId+number]",
+      observationEvents:
+        "id,projectId,observationId,meetingId,[observationId+recordedAt],&[observationId+sequence]",
+      meetingObservations:
+        "id,&[meetingId+observationId],meetingId,observationId",
+      photos: "id,projectId,observationId,eventId",
+      plans: "id,projectId",
+      planMarkers: "id,projectId,[planId+page],planId,observationId",
+      sourceDocuments: "id,projectId,meetingId",
+      reviewCandidates: "id,meetingId,sourceDocumentId",
+      meetingSnapshots: "id,&meetingId,projectId",
+      generatedArtifacts: "id,meetingId,projectId",
+      meetingRevisions: "id,projectId,meetingId",
       settings: "key",
     });
   }

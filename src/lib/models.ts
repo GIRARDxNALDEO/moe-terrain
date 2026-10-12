@@ -65,6 +65,7 @@ export const meetingSchema = z.object({
   closedAt: stamp.optional(),
   previousMeetingId: id.optional(),
   sourceDocumentId: id.optional(),
+  deletedAt: stamp.optional(),
 });
 export type Meeting = z.infer<typeof meetingSchema>;
 export const stateSchema = z.object({
@@ -86,6 +87,8 @@ export const observationSchema = stateSchema.extend({
   createdAt: stamp,
   updatedAt: stamp,
   closedAt: stamp.optional(),
+  deletedAt: stamp.optional(),
+  deletionMeetingId: id.optional(),
 });
 export type Observation = z.infer<typeof observationSchema>;
 export const eventSchema = z.object({
@@ -125,14 +128,20 @@ export const photoMetaSchema = z.object({
   gps: gpsSchema,
   gpsSource: z.literal("device_at_addition"),
 });
-export type Photo = z.infer<typeof photoMetaSchema> & { image: Blob };
+export type Photo = z.infer<typeof photoMetaSchema> & {
+  image: Blob;
+  bytes?: ArrayBuffer;
+};
 export const planMetaSchema = z.object({
   id,
   projectId: id,
   name: z.string().max(500),
   createdAt: stamp,
 });
-export type Plan = z.infer<typeof planMetaSchema> & { file: Blob };
+export type Plan = z.infer<typeof planMetaSchema> & {
+  file: Blob;
+  bytes?: ArrayBuffer;
+};
 export const markerSchema = z.object({
   id,
   projectId: id,
@@ -155,6 +164,7 @@ export const documentMetaSchema = z.object({
 });
 export type SourceDocument = z.infer<typeof documentMetaSchema> & {
   file: Blob;
+  bytes?: ArrayBuffer;
 };
 export const candidateSchema = z.object({
   id,
@@ -209,3 +219,14 @@ export const stateOf = (o: Observation): ObservationState => ({
   status: o.status,
   priority: o.priority,
 });
+
+export const revisionSchema = z.object({
+  id,
+  projectId: id,
+  meetingId: id,
+  archivedAt: stamp,
+  reason: z.string(),
+  snapshot: snapshotSchema,
+  prompt: z.string(),
+});
+export type MeetingRevision = z.infer<typeof revisionSchema>;

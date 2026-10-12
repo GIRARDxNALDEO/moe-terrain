@@ -14,6 +14,7 @@ import {
   candidateSchema,
   snapshotSchema,
   artifactSchema,
+  revisionSchema,
   uuid,
   now,
 } from "./models";
@@ -34,7 +35,7 @@ const schemas = {
 };
 const manifestSchema = z.object({
   format: z.literal("moe-terrain"),
-  schemaVersion: z.literal(1),
+  schemaVersion: z.union([z.literal(1), z.literal(2)]),
   appVersion: z.string(),
   projectId: z.string().uuid(),
   exportedAt: z.iso.datetime(),
@@ -65,58 +66,64 @@ export async function exportProject(
     async () => {
       const project = await db.projects.get(projectId);
       if (!project) throw Error("Projet introuvable");
-      const meetings = await db.meetings
-        .where("projectId")
-        .equals(projectId)
-        .toArray();
-      const ids = meetings.map((m) => m.id);
+      const meetings = (await db.meetings.toArray()).filter(
+        (m) => m.projectId === projectId,
+      );
+      const ids = new Set(meetings.map((m) => m.id));
       return {
         project,
         meetings,
-        observations: await db.observations
-          .where("projectId")
-          .equals(projectId)
-          .toArray(),
-        observation_events: await db.observationEvents
-          .where("projectId")
-          .equals(projectId)
-          .toArray(),
-        meeting_observations: await db.meetingObservations
-          .where("meetingId")
-          .anyOf(ids)
-          .toArray(),
-        photos: await db.photos.where("projectId").equals(projectId).toArray(),
-        plans: await db.plans.where("projectId").equals(projectId).toArray(),
-        plan_markers: await db.planMarkers
-          .where("projectId")
-          .equals(projectId)
-          .toArray(),
-        documents: await db.sourceDocuments
-          .where("projectId")
-          .equals(projectId)
-          .toArray(),
-        review_candidates: await db.reviewCandidates
-          .where("meetingId")
-          .anyOf(ids)
-          .toArray(),
-        meeting_snapshots: await db.meetingSnapshots
-          .where("projectId")
-          .equals(projectId)
-          .toArray(),
-        generated_artifacts: await db.generatedArtifacts
-          .where("projectId")
-          .equals(projectId)
-          .toArray(),
+        observations: (await db.observations.toArray()).filter(
+          (o) => o.projectId === projectId,
+        ),
+        observation_events: (await db.observationEvents.toArray()).filter(
+          (e) => e.projectId === projectId,
+        ),
+        meeting_observations: (await db.meetingObservations.toArray()).filter(
+          (l) => ids.has(l.meetingId),
+        ),
+        photos: (await db.photos.toArray()).filter(
+          (p) => p.projectId === projectId,
+        ),
+        plans: (await db.plans.toArray()).filter(
+          (p) => p.projectId === projectId,
+        ),
+        plan_markers: (await db.planMarkers.toArray()).filter(
+          (p) => p.projectId === projectId,
+        ),
+        documents: (await db.sourceDocuments.toArray()).filter(
+          (d) => d.projectId === projectId,
+        ),
+        review_candidates: (await db.reviewCandidates.toArray()).filter((c) =>
+          ids.has(c.meetingId),
+        ),
+        meeting_snapshots: (await db.meetingSnapshots.toArray()).filter(
+          (s) => s.projectId === projectId,
+        ),
+        meeting_revisions: (await db.meetingRevisions.toArray()).filter(
+          (r) => r.projectId === projectId,
+        ),
+        generated_artifacts: (await db.generatedArtifacts.toArray()).filter(
+          (a) => a.projectId === projectId,
+        ),
       };
     },
   );
   const zip = new JSZip();
   const files: { path: string; size: number; sha256: string }[] = [];
-  async function add(path: string, value: string | Blob) {
+  async function add(path: string, value: string | Blob | ArrayBuffer) {
     const bytes =
       typeof value === "string"
         ? new TextEncoder().encode(value)
-        : new Uint8Array(await value.arrayBuffer());
+        : value instanceof ArrayBuffer
+          ? new Uint8Array(value)
+          : new Uint8Array(
+              await value.arrayBuffer().catch(() => {
+                throw Error(
+                  `Impossible de lire le média ${path}. L’original local est indisponible ; aucun ZIP incomplet n’a été généré.`,
+                );
+              }),
+            );
     zip.file(path, bytes);
     files.push({ path, size: bytes.byteLength, sha256: await sha(bytes) });
     if (files.reduce((n, f) => n + f.size, 0) > 240 * 1024 * 1024)
@@ -124,9 +131,11 @@ export async function exportProject(
         "Ce projet dépasse la limite de transfert V0.1 (240 Mo de contenu). Réduisez la taille des médias avant ajout ou utilisez une future version prenant en charge les archives volumineuses.",
       );
   }
-  const photo_metadata = data.photos.map(({ image, ...meta }) => meta);
-  const plans = data.plans.map(({ file, ...meta }) => meta);
-  const source_documents = data.documents.map(({ file, ...meta }) => meta);
+  const photo_metadata = data.photos.map(({ image, bytes, ...meta }) => meta);
+  const plans = data.plans.map(({ file, bytes, ...meta }) => meta);
+  const source_documents = data.documents.map(
+    ({ file, bytes, ...meta }) => meta,
+  );
   for (const [key, value] of Object.entries({
     project: data.project,
     meetings: data.meetings,
@@ -140,13 +149,17 @@ export async function exportProject(
     review_candidates: data.review_candidates,
     meeting_snapshots: data.meeting_snapshots,
     generated_artifacts: data.generated_artifacts,
+    meeting_revisions: data.meeting_revisions,
   }))
     await add(`${key}.json`, JSON.stringify(value, null, 2));
   for (const p of data.photos)
-    await add(`photos/${p.id}.${extension(p.originalName)}`, p.image);
-  for (const p of data.plans) await add(`plans/${p.id}.pdf`, p.file);
+    await add(
+      `photos/${p.id}.${extension(p.originalName)}`,
+      p.bytes || p.image,
+    );
+  for (const p of data.plans) await add(`plans/${p.id}.pdf`, p.bytes || p.file);
   for (const d of data.documents)
-    await add(`documents/${d.id}.${d.format}`, d.file);
+    await add(`documents/${d.id}.${d.format}`, d.bytes || d.file);
   for (const s of data.meeting_snapshots)
     await add(
       `generated/${s.meetingId}/summary.json`,
@@ -154,9 +167,14 @@ export async function exportProject(
     );
   for (const a of data.generated_artifacts)
     await add(`generated/${a.meetingId}/prompt_update.txt`, a.text);
-  const last = data.generated_artifacts.sort((a, b) =>
-    b.createdAt.localeCompare(a.createdAt),
-  )[0];
+  const liveMeetings = new Set(
+    data.meetings
+      .filter((m) => !m.deletedAt && m.status === "closed")
+      .map((m) => m.id),
+  );
+  const last = data.generated_artifacts
+    .filter((a) => liveMeetings.has(a.meetingId))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   await add(
     "prompt_update.txt",
     last?.text ||
@@ -167,8 +185,8 @@ export async function exportProject(
     JSON.stringify(
       {
         format: "moe-terrain",
-        schemaVersion: 1,
-        appVersion: "0.1.0",
+        schemaVersion: 2,
+        appVersion: "0.1.1",
         projectId,
         exportedAt: now(),
         files,
@@ -178,8 +196,16 @@ export async function exportProject(
     ),
   );
   return {
-    blob: await zip.generateAsync({ type: "blob", compression: "STORE" }, (m) =>
-      onProgress?.(m.percent),
+    blob: new Blob(
+      [
+        new Uint8Array(
+          await zip.generateAsync(
+            { type: "uint8array", compression: "STORE" },
+            (m) => onProgress?.(m.percent),
+          ),
+        ).buffer,
+      ],
+      { type: "application/zip" },
     ),
     name: `${data.project.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") || "Projet"}.zip`,
   };
@@ -245,6 +271,9 @@ export async function inspectArchive(file: File) {
     return JSON.parse(await f.async("string"));
   };
   const d = {
+    meeting_revisions: listed.has("meeting_revisions.json")
+      ? z.array(revisionSchema).parse(await read("meeting_revisions"))
+      : [],
     project: projectSchema.parse(await read("project")),
     meetings: schemas.meetings.parse(await read("meetings")),
     observations: schemas.observations.parse(await read("observations")),
@@ -358,8 +387,16 @@ export async function inspectArchive(file: File) {
     requires("source_documents", s.sourceDocumentId);
   }
   for (const a of d.generated_artifacts) requires("meetings", a.meetingId);
-  if (d.meetings.filter((m) => m.status !== "closed").length > 1)
-    throw Error("Plusieurs réunions actives");
+  for (const r of d.meeting_revisions) {
+    requires("meetings", r.meetingId);
+    for (const o of r.snapshot.observations) requires("observations", o.id);
+    for (const p of r.snapshot.photoIds) requires("photo_metadata", p);
+    if (
+      r.snapshot.meetingId !== r.meetingId ||
+      r.snapshot.projectId !== d.project.id
+    )
+      throw Error("Ancien bilan incohérent");
+  }
   for (const m of d.meetings.filter((m) => m.status === "closed"))
     if (
       !snaps.has(m.id) ||
@@ -376,6 +413,7 @@ export async function inspectArchive(file: File) {
   for (const p of d.photo_metadata)
     photos.push({
       ...p,
+      bytes: undefined as ArrayBuffer | undefined,
       image: await binary(
         `photos/${p.id}.${extension(p.originalName)}`,
         p.mimeType,
@@ -385,12 +423,14 @@ export async function inspectArchive(file: File) {
   for (const p of d.plans)
     plans.push({
       ...p,
+      bytes: undefined as ArrayBuffer | undefined,
       file: await binary(`plans/${p.id}.pdf`, "application/pdf"),
     });
   const documents = [];
   for (const p of d.source_documents)
     documents.push({
       ...p,
+      bytes: undefined as ArrayBuffer | undefined,
       file: await binary(
         `documents/${p.id}.${p.format}`,
         p.format === "pdf"
@@ -398,6 +438,9 @@ export async function inspectArchive(file: File) {
           : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       ),
     });
+  for (const p of photos) p.bytes = await p.image.arrayBuffer();
+  for (const p of plans) p.bytes = await p.file.arrayBuffer();
+  for (const p of documents) p.bytes = await p.file.arrayBuffer();
   return {
     data: d,
     photos,
@@ -444,17 +487,20 @@ export async function commitArchive(
   };
   const transformed = remap(d) as typeof d;
   if (mode === "copy") transformed.project.name += " — copie";
-  const photos = a.photos.map(({ image, ...meta }) => ({
+  const photos = a.photos.map(({ image, bytes, ...meta }) => ({
     ...(remap(meta) as typeof meta),
     image,
+    bytes,
   }));
-  const plans = a.plans.map(({ file, ...meta }) => ({
+  const plans = a.plans.map(({ file, bytes, ...meta }) => ({
     ...(remap(meta) as typeof meta),
     file,
+    bytes,
   }));
-  const documents = a.documents.map(({ file, ...meta }) => ({
+  const documents = a.documents.map(({ file, bytes, ...meta }) => ({
     ...(remap(meta) as typeof meta),
     file,
+    bytes,
   }));
   // Prompts contain human-readable old paths: regenerate for a copied project.
   if (mode === "copy") {
@@ -471,6 +517,18 @@ export async function commitArchive(
         meeting,
         snapshot,
         photos.filter((p) => snapshot.photoIds.includes(p.id)),
+      );
+    }
+  }
+  if (mode === "copy") {
+    const { generatePrompt } = await import("./copilot");
+    for (const r of transformed.meeting_revisions) {
+      const m = transformed.meetings.find((m) => m.id === r.meetingId)!;
+      r.prompt = generatePrompt(
+        transformed.project,
+        m,
+        r.snapshot,
+        photos.filter((p) => r.snapshot.photoIds.includes(p.id)),
       );
     }
   }
@@ -511,6 +569,7 @@ export async function commitArchive(
         ["reviewCandidates", transformed.review_candidates],
         ["meetingSnapshots", transformed.meeting_snapshots],
         ["generatedArtifacts", transformed.generated_artifacts],
+        ["meetingRevisions", transformed.meeting_revisions],
       ];
       for (const [name, rows] of batches)
         if (rows.length) await db.table(name).bulkAdd(rows);
@@ -523,6 +582,9 @@ export function download(blob: Blob, name: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
+  a.style.display = "none";
+  document.body.appendChild(a);
   a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
